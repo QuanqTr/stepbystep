@@ -18,47 +18,82 @@ app.add_middleware(
 
 def zhang_suen_thinning(binary_image):
     """
-    Perform Zhang-Suen thinning algorithm for skeletonization using OpenCV.
-    Input: Binary image (0 and 1, or 0 and 255 where 255 is foreground).
-    Output: Skeletonized image (0 and 255).
+    Vectorized implementation of Zhang-Suen thinning algorithm using OpenCV/NumPy.
     """
-    # Ensure binary is 0 and 1
-    if binary_image.max() > 1:
-        binary_image = (binary_image > 0).astype(np.uint8)
+    # Normalize to 0 and 1
+    img = (binary_image > 0).astype(np.uint8)
     
-    skeleton = binary_image.copy()
-    
-    # Define kernels for Zhang-Suen
-    # This involves complex hit-or-miss interactions. 
-    # A simpler approach in classic CV is commonly just `cv2.ximgproc.thinning` 
-    # but that requires opencv-contrib-python which might be large too.
-    # Let's implement a standard iterative erosion (morphological thinning) for robustness without extra deps.
-    
-    # Actually, standard cv2.erode isn't true skeletonization.
-    # Let's use a standard implementation available in pure numpy or basic cv2.
-    # A common effective way without `ximgproc` is iteratively eroding until no change, 
-    # but preserving connectivity.
-    
-    # Standard 2-pass algorithm (Zhang-Suen) implementation with cv2 filters is efficient enough.
-    # But for simplicity and stability without `skimage`, we can try a simple distance transform ridge
-    # or just use the built-in `cv2.ximgproc.thinning` IF `opencv-python-headless` includes it.
-    # Standard `opencv-python-headless` often DOES NOT include `ximgproc` (part of contrib).
-    
-    # Start basic morphological thinning (inefficient but works for 250MB limit context):
-    skel = np.zeros(binary_image.shape, np.uint8)
-    eroded = binary_image.copy() * 255 # working with 0-255
-    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
+    # Pre-allocate for performance
+    prev_img = np.zeros_like(img)
     
     while True:
-        eroded_next = cv2.erode(eroded, element)
-        temp = cv2.dilate(eroded_next, element)
-        temp = cv2.subtract(eroded, temp)
-        skel = cv2.bitwise_or(skel, temp)
-        eroded = eroded_next.copy()
-        if cv2.countNonZero(eroded) == 0:
+        # Check if changed
+        if np.array_equal(img, prev_img):
             break
+        prev_img = img.copy()
+        
+        # Iteration 1
+        # Get neighbors
+        p2 = np.roll(img, -1, axis=0) # N
+        p3 = np.roll(np.roll(img, -1, axis=0), 1, axis=1) # NE
+        p4 = np.roll(img, 1, axis=1) # E
+        p5 = np.roll(np.roll(img, 1, axis=0), 1, axis=1) # SE
+        p6 = np.roll(img, 1, axis=0) # S
+        p7 = np.roll(np.roll(img, 1, axis=0), -1, axis=1) # SW
+        p8 = np.roll(img, -1, axis=1) # W
+        p9 = np.roll(np.roll(img, -1, axis=0), -1, axis=1) # NW
+        
+        # Calculate B (number of non-zero neighbors)
+        B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+        
+        # Calculate A (0->1 transitions in clockwise order)
+        # 0->1 means !curr & next
+        # (p2==0 && p3==1) + ...
+        A = ((p2 == 0) & (p3 == 1)) + \
+            ((p3 == 0) & (p4 == 1)) + \
+            ((p4 == 0) & (p5 == 1)) + \
+            ((p5 == 0) & (p6 == 1)) + \
+            ((p6 == 0) & (p7 == 1)) + \
+            ((p7 == 0) & (p8 == 1)) + \
+            ((p8 == 0) & (p9 == 1)) + \
+            ((p9 == 0) & (p2 == 1))
             
-    return skel
+        # Conditions
+        m1 = (p2 * p4 * p6) == 0
+        m2 = (p4 * p6 * p8) == 0
+        
+        # Determine pixels to delete
+        delete_mask = (B >= 2) & (B <= 6) & (A == 1) & m1 & m2
+        img[delete_mask] = 0
+        
+        # Iteration 2
+        # Re-calc neighbors (image changed)
+        p2 = np.roll(img, -1, axis=0)
+        p3 = np.roll(np.roll(img, -1, axis=0), 1, axis=1)
+        p4 = np.roll(img, 1, axis=1)
+        p5 = np.roll(np.roll(img, 1, axis=0), 1, axis=1)
+        p6 = np.roll(img, 1, axis=0)
+        p7 = np.roll(np.roll(img, 1, axis=0), -1, axis=1)
+        p8 = np.roll(img, -1, axis=1)
+        p9 = np.roll(np.roll(img, -1, axis=0), -1, axis=1)
+        
+        B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+        A = ((p2 == 0) & (p3 == 1)) + \
+            ((p3 == 0) & (p4 == 1)) + \
+            ((p4 == 0) & (p5 == 1)) + \
+            ((p5 == 0) & (p6 == 1)) + \
+            ((p6 == 0) & (p7 == 1)) + \
+            ((p7 == 0) & (p8 == 1)) + \
+            ((p8 == 0) & (p9 == 1)) + \
+            ((p9 == 0) & (p2 == 1))
+            
+        m1 = (p2 * p4 * p8) == 0
+        m2 = (p2 * p6 * p8) == 0
+        
+        delete_mask = (B >= 2) & (B <= 6) & (A == 1) & m1 & m2
+        img[delete_mask] = 0
+        
+    return img * 255
 
 def simple_clustering(data: List[np.ndarray], eps: float):
     """
