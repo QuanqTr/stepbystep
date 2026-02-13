@@ -33,16 +33,20 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.ts
 
 # python
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
-venv/
-env/
+.venv
 .env
-
-# nested project
-temp-app/
+venv/
+ENV/
+env/
+instance/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.spec

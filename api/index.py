@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
+from skimage.morphology import skeletonize
 from io import BytesIO
 from typing import List, Dict
 
@@ -15,127 +16,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-def zhang_suen_thinning(binary_image):
-    """
-    Vectorized implementation of Zhang-Suen thinning algorithm using OpenCV/NumPy.
-    """
-    # Normalize to 0 and 1
-    img = (binary_image > 0).astype(np.uint8)
-    
-    # Pre-allocate for performance
-    prev_img = np.zeros_like(img)
-    
-    while True:
-        # Check if changed
-        if np.array_equal(img, prev_img):
-            break
-        prev_img = img.copy()
-        
-        # Iteration 1
-        # Get neighbors
-        p2 = np.roll(img, -1, axis=0) # N
-        p3 = np.roll(np.roll(img, -1, axis=0), 1, axis=1) # NE
-        p4 = np.roll(img, 1, axis=1) # E
-        p5 = np.roll(np.roll(img, 1, axis=0), 1, axis=1) # SE
-        p6 = np.roll(img, 1, axis=0) # S
-        p7 = np.roll(np.roll(img, 1, axis=0), -1, axis=1) # SW
-        p8 = np.roll(img, -1, axis=1) # W
-        p9 = np.roll(np.roll(img, -1, axis=0), -1, axis=1) # NW
-        
-        # Calculate B (number of non-zero neighbors)
-        B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
-        
-        # Calculate A (0->1 transitions in clockwise order)
-        # 0->1 means !curr & next
-        # (p2==0 && p3==1) + ...
-        A = ((p2 == 0) & (p3 == 1)) + \
-            ((p3 == 0) & (p4 == 1)) + \
-            ((p4 == 0) & (p5 == 1)) + \
-            ((p5 == 0) & (p6 == 1)) + \
-            ((p6 == 0) & (p7 == 1)) + \
-            ((p7 == 0) & (p8 == 1)) + \
-            ((p8 == 0) & (p9 == 1)) + \
-            ((p9 == 0) & (p2 == 1))
-            
-        # Conditions
-        m1 = (p2 * p4 * p6) == 0
-        m2 = (p4 * p6 * p8) == 0
-        
-        # Determine pixels to delete
-        delete_mask = (B >= 2) & (B <= 6) & (A == 1) & m1 & m2
-        img[delete_mask] = 0
-        
-        # Iteration 2
-        # Re-calc neighbors (image changed)
-        p2 = np.roll(img, -1, axis=0)
-        p3 = np.roll(np.roll(img, -1, axis=0), 1, axis=1)
-        p4 = np.roll(img, 1, axis=1)
-        p5 = np.roll(np.roll(img, 1, axis=0), 1, axis=1)
-        p6 = np.roll(img, 1, axis=0)
-        p7 = np.roll(np.roll(img, 1, axis=0), -1, axis=1)
-        p8 = np.roll(img, -1, axis=1)
-        p9 = np.roll(np.roll(img, -1, axis=0), -1, axis=1)
-        
-        B = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
-        A = ((p2 == 0) & (p3 == 1)) + \
-            ((p3 == 0) & (p4 == 1)) + \
-            ((p4 == 0) & (p5 == 1)) + \
-            ((p5 == 0) & (p6 == 1)) + \
-            ((p6 == 0) & (p7 == 1)) + \
-            ((p7 == 0) & (p8 == 1)) + \
-            ((p8 == 0) & (p9 == 1)) + \
-            ((p9 == 0) & (p2 == 1))
-            
-        m1 = (p2 * p4 * p8) == 0
-        m2 = (p2 * p6 * p8) == 0
-        
-        delete_mask = (B >= 2) & (B <= 6) & (A == 1) & m1 & m2
-        img[delete_mask] = 0
-        
-    return img * 255
-
-def simple_clustering(data: List[np.ndarray], eps: float):
-    """
-    Simple distance-based clustering (like simpler DBSCAN) to replace sklearn.
-    data: List[np.array([y, x])] centroids
-    eps: max distance
-    Returns: labels array
-    """
-    n = len(data)
-    if n == 0:
-        return []
-    
-    labels = [-1] * n
-    cluster_id = 0
-    
-    for i in range(n):
-        if labels[i] != -1:
-            continue
-            
-        # Start new cluster
-        labels[i] = cluster_id
-        stack = [i]
-        
-        while stack:
-            current_idx = stack.pop()
-            current_point = data[current_idx]
-            
-            # Find neighbors
-            for j in range(n):
-                if labels[j] != -1:
-                    continue
-                
-                # Euclidean distance
-                dist = np.linalg.norm(current_point - data[j])
-                
-                if dist <= eps:
-                    labels[j] = cluster_id
-                    stack.append(j)
-        
-        cluster_id += 1
-        
-    return labels
 
 def detect_junctions(skeleton: np.ndarray) -> np.ndarray:
     """
@@ -179,10 +59,11 @@ async def process_image(file: UploadFile = File(...)):
         # Assuming line art is black lines on white background -> Invert to get white lines.
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # 2. Skeletonization (Replaced skimage)
-        # Normalize binary for morphological ops
-        binary_bool = (binary > 0).astype(np.uint8)
-        skeleton_uint8 = zhang_suen_thinning(binary_bool)
+        # 2. Skeletonization
+        # skimage skeletonize expects boolean or 0/1 array.
+        binary_bool = binary > 0
+        skeleton = skeletonize(binary_bool)
+        skeleton_uint8 = (skeleton * 255).astype(np.uint8)
         
         # 2.5 Distance Transform for Width Estimation
         # Calculate distance from background for every foreground pixel
@@ -207,30 +88,28 @@ async def process_image(file: UploadFile = File(...)):
         # Collect centroids for clustering
         valid_centroids = []
         valid_label_ids = []
-        
-        # Skip background (label 0)
-        # Note: centroids are (x, y) float
-        for label_id in range(1, num_labels): 
+
+        for label_id in range(1, num_labels): # Skip background (0)
             if stats[label_id, cv2.CC_STAT_AREA] < min_segment_length:
                 continue
             
-            # Switch to (y, x) for distance calculation to match numpy standard if needed, 
-            # but Euclidean is symmetric. Keeping (y, x) array for clustering function if using indices.
-            # Centroids from cv2 are (x, y). Let's use (y, x) for consistency with matrix indexing if needed.
-            # Actually clustering just needs consistent coordinates. Let's use (x,y)
-            cx, cy = centroids[label_id]
-            valid_centroids.append(np.array([cy, cx])) # Use Y, X for consistency with image coords usually
+            valid_centroids.append(centroids[label_id])
             valid_label_ids.append(label_id)
 
-        # 6. Proximity Clustering (Replaced sklearn DBSCAN)
+        # 6. Proximity Clustering (DBSCAN)
+        # Epsilon is max distance between two samples for one to be considered as in the neighborhood of the other.
+        # min_samples=1 ensures every point is part of a cluster (no noise points thrown away if possible, or just own cluster)
         group_ids = {}
         if valid_centroids:
-            # Custom simple clustering
-            # eps=35 pixels
-            clustering_labels = simple_clustering(valid_centroids, eps=35.0)
+            from sklearn.cluster import DBSCAN
+            # eps=50 pixels seems reasonable for "nearby" strokes? Adjustable.
+            # Convert centroids to np array
+            X = np.array(valid_centroids)
+            # eps 30-50 depends on image resolution. Let's pick 35.
+            clustering = DBSCAN(eps=35, min_samples=1).fit(X)
             
             for idx, label_id in enumerate(valid_label_ids):
-                group_ids[label_id] = clustering_labels[idx]
+                group_ids[label_id] = int(clustering.labels_[idx])
         
         height, width = segments_skeleton.shape
         

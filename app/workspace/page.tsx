@@ -1,7 +1,7 @@
 "use client"
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Layers, ChevronRight, Download, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, Hand } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Upload, Layers, Check, ChevronRight, Download, Brush, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, FileCode, Hand, Eraser } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import JSZip from 'jszip';
@@ -35,18 +35,6 @@ interface Step {
 
 type ToolType = 'select' | 'hand' | 'lasso' | 'wand' | 'cluster' | 'eraser';
 
-function isPointInPolygon(point: Point, polygon: Point[]): boolean {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i].x, yi = polygon[i].y;
-        const xj = polygon[j].x, yj = polygon[j].y;
-        const intersect = ((yi > point.y) !== (yj > point.y)) &&
-            (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
-    }
-    return inside;
-}
-
 export default function WorkspacePage() {
     const [image, setImage] = useState<string | null>(null);
     const [originalImageFile, setOriginalImageFile] = useState<HTMLImageElement | null>(null);
@@ -68,13 +56,12 @@ export default function WorkspacePage() {
 
     // Tools
     const [activeTool, setActiveTool] = useState<ToolType>('select');
-    const [brushRadius] = useState(20);
+    const [brushRadius, setBrushRadius] = useState(20);
     const [lassoPath, setLassoPath] = useState<Point[]>([]);
     const [isDragSelect, setIsDragSelect] = useState(false);
     const [showOriginal, setShowOriginal] = useState(true);
     const [isDeleteMode, setIsDeleteMode] = useState(false);
     const [downloadAll, setDownloadAll] = useState(false);
-    const [exportFormat, setExportFormat] = useState<'png' | 'svg' | 'webp'>('png');
 
     // GIF Modal State
     const [showGifModal, setShowGifModal] = useState(false);
@@ -96,23 +83,23 @@ export default function WorkspacePage() {
         setCurrentStepId(newCurrentStepId);
     }, [history, historyIndex]);
 
-    const undo = useCallback(() => {
+    const undo = () => {
         if (historyIndex > 0) {
             const prevState = history[historyIndex - 1];
             setHistoryIndex(historyIndex - 1);
             setSteps(prevState.steps);
             setCurrentStepId(prevState.currentStepId);
         }
-    }, [history, historyIndex]);
+    };
 
-    const redo = useCallback(() => {
+    const redo = () => {
         if (historyIndex < history.length - 1) {
             const nextState = history[historyIndex + 1];
             setHistoryIndex(historyIndex + 1);
             setSteps(nextState.steps);
             setCurrentStepId(nextState.currentStepId);
         }
-    }, [history, historyIndex]);
+    };
 
     const getAssignedSegmentIds = () => {
         const assigned = new Set<number>();
@@ -166,9 +153,9 @@ export default function WorkspacePage() {
 
 
     // --- Selection Logic ---
-    const updateStepsWithSelection = useCallback((newSteps: Step[]) => {
+    const updateStepsWithSelection = (newSteps: Step[]) => {
         pushHistory(newSteps, currentStepId);
-    }, [pushHistory, currentStepId]);
+    };
 
     const selectSegment = (segmentId: number, multi = false) => {
         const newSteps = steps.map(step => {
@@ -210,8 +197,7 @@ export default function WorkspacePage() {
         updateStepsWithSelection(newSteps);
     };
 
-
-    const deselectAllInStep = useCallback(() => {
+    const deselectAllInStep = () => {
         const newSteps = steps.map(step => {
             if (step.id === currentStepId) {
                 return { ...step, segments: [] };
@@ -219,7 +205,7 @@ export default function WorkspacePage() {
             return step;
         });
         updateStepsWithSelection(newSteps);
-    }, [steps, currentStepId, pushHistory]); // Added callback and dependencies
+    }
 
     // --- Mouse & Tool Handling ---
     const getCanvasPoint = (e: React.MouseEvent<HTMLCanvasElement>): Point => {
@@ -364,7 +350,8 @@ export default function WorkspacePage() {
 
     const isPointInPolygon = (p: Point, polygon: Point[]) => {
         let isInside = false;
-        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        let i = 0, j = polygon.length - 1;
+        for (; i < polygon.length; j = i++) {
             if ((polygon[i].y > p.y) !== (polygon[j].y > p.y) &&
                 p.x < (polygon[j].x - polygon[i].x) * (p.y - polygon[i].y) / (polygon[j].y - polygon[i].y) + polygon[i].x) {
                 isInside = !isInside;
@@ -375,27 +362,19 @@ export default function WorkspacePage() {
 
     const autoDistribute = () => {
         if (segments.length === 0) return;
+        const sortedSegments = [...segments].sort((a, b) => a.bbox.y - b.bbox.y);
+        const numSteps = 5;
+        const chunkSize = Math.ceil(sortedSegments.length / numSteps);
 
-        // Group by group_id from backend
-        const groups: Record<number, number[]> = {};
-        segments.forEach(seg => {
-            const gId = seg.group_id !== -1 ? seg.group_id : seg.id; // Fallback to self if no group
-            if (!groups[gId]) groups[gId] = [];
-            groups[gId].push(seg.id);
-        });
-
-        const newSteps: Step[] = Object.values(groups).map((segIds, index) => ({
-            id: index + 1,
-            segments: segIds
-        }));
-
-        // If only 1 group found (failure?), fall back to vertical split?
-        // But backend should produce reasonable groups.
-        // If 0 groups, newSteps is empty.
-
-        if (newSteps.length > 0) {
-            pushHistory(newSteps, 1);
+        const newSteps: Step[] = [];
+        for (let i = 0; i < numSteps; i++) {
+            const chunk = sortedSegments.slice(i * chunkSize, (i + 1) * chunkSize);
+            newSteps.push({
+                id: i + 1,
+                segments: chunk.map(s => s.id)
+            });
         }
+        pushHistory(newSteps, 1);
     };
 
     // --- Export Logic ---
@@ -470,9 +449,7 @@ export default function WorkspacePage() {
 
     const exportSVG = (stepId?: number) => {
         if (segments.length === 0) return;
-        let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">
-        <style>path { fill: none !important; stroke: black; stroke-linecap: round; stroke-linejoin: round; }</style>
-        <g fill="none" stroke="black" stroke-width="1">`;
+        let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">`;
 
         // Export EXCLUSIVE (Current Step Only)
         const targetStepId = stepId || currentStepId;
@@ -488,7 +465,7 @@ export default function WorkspacePage() {
                 }
             });
         });
-        svgContent += '</g></svg>';
+        svgContent += '</svg>';
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
         saveAs(blob, `step-${targetStepId}-${Date.now()}.svg`);
     };
@@ -500,9 +477,7 @@ export default function WorkspacePage() {
 
         steps.forEach((step, index) => {
             // Generate SVG for step i (EXCLUSIVE)
-            let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">
-            <style>path { fill: none !important; stroke: black; stroke-linecap: round; stroke-linejoin: round; }</style>
-            <g fill="none" stroke="black" stroke-width="1">`;
+            let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">`;
             const relevantSteps = [steps[index]]; // EXCLUSIVE
 
             relevantSteps.forEach(s => {
@@ -514,74 +489,12 @@ export default function WorkspacePage() {
                     }
                 });
             });
-            svgContent += '</g></svg>';
+            svgContent += '</svg>';
             folder?.file(`step-${index + 1}.svg`, svgContent);
         });
 
         const content = await zip.generateAsync({ type: "blob" });
         saveAs(content, `drawing-steps-svg-${Date.now()}.zip`);
-    };
-
-    const exportWebP = (stepId?: number) => {
-        if (!imageSize.width) return;
-        const canvas = document.createElement('canvas');
-        canvas.width = imageSize.width;
-        canvas.height = imageSize.height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        const targetStepId = stepId || currentStepId;
-        drawSegmentsOnCanvas(ctx, targetStepId, false);
-
-        canvas.toBlob(blob => {
-            if (blob) saveAs(blob, `step-${targetStepId}-${Date.now()}.webp`);
-        }, 'image/webp');
-    };
-
-    const exportAllWebP = async () => {
-        if (steps.length === 0) return;
-        const zip = new JSZip();
-        const folder = zip.folder("steps_webp");
-
-        for (let i = 0; i < steps.length; i++) {
-            const canvas = document.createElement('canvas');
-            canvas.width = imageSize.width;
-            canvas.height = imageSize.height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                const relevantSteps = [steps[i]];
-                relevantSteps.forEach(s => {
-                    s.segments.forEach(segId => {
-                        const seg = segments.find(sg => sg.id === segId);
-                        if (seg) drawSegmentPath(ctx, seg, '#000000', 1.0);
-                    });
-                });
-
-                const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(blob => resolve(blob), 'image/webp'));
-                if (blob) {
-                    folder?.file(`step-${i + 1}.webp`, blob);
-                }
-            }
-        }
-
-        const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, `drawing-steps-webp-${Date.now()}.zip`);
-    };
-
-    const handleExport = () => {
-        if (downloadAll) {
-            switch (exportFormat) {
-                case 'png': exportAllZIP(); break;
-                case 'svg': exportAllSVG(); break;
-                case 'webp': exportAllWebP(); break;
-            }
-        } else {
-            switch (exportFormat) {
-                case 'png': exportImage(); break;
-                case 'svg': exportSVG(); break;
-                case 'webp': exportWebP(); break;
-            }
-        }
     };
 
     const generateGIF = async (transparent: boolean) => {
@@ -898,23 +811,15 @@ export default function WorkspacePage() {
                         </motion.div>
                     ))}
 
-                    <div className="flex gap-2">
-                        <button
-                            onClick={autoDistribute}
-                            className="flex-1 py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
-                        >
-                            <Zap size={16} /> Auto
-                        </button>
-                        <button
-                            onClick={() => {
-                                const newSteps = [...steps, { id: Date.now(), segments: [] }];
-                                pushHistory(newSteps, newSteps[newSteps.length - 1].id);
-                            }}
-                            className="flex-1 py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
-                        >
-                            <Layers size={16} /> Add Step
-                        </button>
-                    </div>
+                    <button
+                        onClick={() => {
+                            const newSteps = [...steps, { id: Date.now(), segments: [] }];
+                            pushHistory(newSteps, newSteps[newSteps.length - 1].id);
+                        }}
+                        className="w-full py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
+                    >
+                        <Layers size={16} /> Add Step
+                    </button>
                 </div>
 
                 <div className="p-4 border-t border-neutral-800 space-y-2 bg-neutral-900">
@@ -943,30 +848,27 @@ export default function WorkspacePage() {
 
                         <div className="flex gap-2">
                             <button
-                                onClick={handleExport}
+                                onClick={() => downloadAll ? exportAllZIP() : exportImage()}
                                 className={cn(
                                     "flex-1 flex items-center justify-center gap-2 text-white py-2 rounded-lg font-medium transition-colors text-sm",
-                                    "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-900/20"
+                                    downloadAll
+                                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-900/20"
+                                        : "bg-neutral-800 hover:bg-neutral-700"
                                 )}
+                                title={downloadAll ? "Download ZIP of all steps" : "Download current step image"}
                             >
                                 <Download size={16} />
-                                Download {exportFormat.toUpperCase()} {downloadAll ? "(ZIP)" : ""}
+                                {downloadAll ? "Download ZIP" : "Download PNG"}
                             </button>
 
-                            <div className="relative">
-                                <select
-                                    value={exportFormat}
-                                    onChange={e => setExportFormat(e.target.value as any)}
-                                    className="appearance-none bg-neutral-800 text-white text-sm rounded-lg pl-3 pr-8 py-2 border border-neutral-700 focus:outline-none focus:border-blue-500 h-full cursor-pointer hover:bg-neutral-700 transition-colors"
-                                >
-                                    <option value="png">PNG</option>
-                                    <option value="svg">SVG</option>
-                                    <option value="webp">WebP</option>
-                                </select>
-                                <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400">
-                                    <ChevronRight size={14} className="rotate-90" />
-                                </div>
-                            </div>
+                            <button
+                                onClick={() => downloadAll ? exportAllSVG() : exportSVG()}
+                                className="flex-1 flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 text-white py-2 rounded-lg font-medium transition-colors text-sm"
+                                title={downloadAll ? "Download ZIP of all steps (SVG)" : "Download current step as SVG"}
+                            >
+                                <FileCode size={16} />
+                                {downloadAll && <span className="text-xs">ZIP</span>}
+                            </button>
                         </div>
 
                         <button
