@@ -375,19 +375,27 @@ export default function WorkspacePage() {
 
     const autoDistribute = () => {
         if (segments.length === 0) return;
-        const sortedSegments = [...segments].sort((a, b) => a.bbox.y - b.bbox.y);
-        const numSteps = 5;
-        const chunkSize = Math.ceil(sortedSegments.length / numSteps);
 
-        const newSteps: Step[] = [];
-        for (let i = 0; i < numSteps; i++) {
-            const chunk = sortedSegments.slice(i * chunkSize, (i + 1) * chunkSize);
-            newSteps.push({
-                id: i + 1,
-                segments: chunk.map(s => s.id)
-            });
+        // Group by group_id from backend
+        const groups: Record<number, number[]> = {};
+        segments.forEach(seg => {
+            const gId = seg.group_id !== -1 ? seg.group_id : seg.id; // Fallback to self if no group
+            if (!groups[gId]) groups[gId] = [];
+            groups[gId].push(seg.id);
+        });
+
+        const newSteps: Step[] = Object.values(groups).map((segIds, index) => ({
+            id: index + 1,
+            segments: segIds
+        }));
+
+        // If only 1 group found (failure?), fall back to vertical split?
+        // But backend should produce reasonable groups.
+        // If 0 groups, newSteps is empty.
+
+        if (newSteps.length > 0) {
+            pushHistory(newSteps, 1);
         }
-        pushHistory(newSteps, 1);
     };
 
     // --- Export Logic ---
@@ -890,15 +898,23 @@ export default function WorkspacePage() {
                         </motion.div>
                     ))}
 
-                    <button
-                        onClick={() => {
-                            const newSteps = [...steps, { id: Date.now(), segments: [] }];
-                            pushHistory(newSteps, newSteps[newSteps.length - 1].id);
-                        }}
-                        className="w-full py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
-                    >
-                        <Layers size={16} /> Add Step
-                    </button>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={autoDistribute}
+                            className="flex-1 py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
+                        >
+                            <Zap size={16} /> Auto
+                        </button>
+                        <button
+                            onClick={() => {
+                                const newSteps = [...steps, { id: Date.now(), segments: [] }];
+                                pushHistory(newSteps, newSteps[newSteps.length - 1].id);
+                            }}
+                            className="flex-1 py-3 border-2 border-dashed border-neutral-800 rounded-xl text-neutral-500 hover:border-neutral-700 hover:text-neutral-400 transition-colors flex items-center justify-center gap-2 hover:bg-neutral-800/50"
+                        >
+                            <Layers size={16} /> Add Step
+                        </button>
+                    </div>
                 </div>
 
                 <div className="p-4 border-t border-neutral-800 space-y-2 bg-neutral-900">
