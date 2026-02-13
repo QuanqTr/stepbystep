@@ -43,3 +43,6 @@ __pycache__/
 venv/
 env/
 .env
+
+# nested project
+temp-app/
