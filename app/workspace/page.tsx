@@ -1,7 +1,7 @@
 "use client"
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Layers, ChevronRight, Download, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, Hand } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import JSZip from 'jszip';
@@ -56,7 +56,7 @@ export default function WorkspacePage() {
 
     // Tools
     const [activeTool, setActiveTool] = useState<ToolType>('select');
-    const [brushRadius, setBrushRadius] = useState(20);
+    const [brushRadius] = useState(20);
     const [lassoPath, setLassoPath] = useState<Point[]>([]);
     const [isDragSelect, setIsDragSelect] = useState(false);
     const [showOriginal, setShowOriginal] = useState(true);
@@ -84,23 +84,23 @@ export default function WorkspacePage() {
         setCurrentStepId(newCurrentStepId);
     }, [history, historyIndex]);
 
-    const undo = () => {
+    const undo = useCallback(() => {
         if (historyIndex > 0) {
             const prevState = history[historyIndex - 1];
             setHistoryIndex(historyIndex - 1);
             setSteps(prevState.steps);
             setCurrentStepId(prevState.currentStepId);
         }
-    };
+    }, [history, historyIndex]);
 
-    const redo = () => {
+    const redo = useCallback(() => {
         if (historyIndex < history.length - 1) {
             const nextState = history[historyIndex + 1];
             setHistoryIndex(historyIndex + 1);
             setSteps(nextState.steps);
             setCurrentStepId(nextState.currentStepId);
         }
-    };
+    }, [history, historyIndex]);
 
     const getAssignedSegmentIds = () => {
         const assigned = new Set<number>();
@@ -154,9 +154,9 @@ export default function WorkspacePage() {
 
 
     // --- Selection Logic ---
-    const updateStepsWithSelection = (newSteps: Step[]) => {
+    const updateStepsWithSelection = useCallback((newSteps: Step[]) => {
         pushHistory(newSteps, currentStepId);
-    };
+    }, [pushHistory, currentStepId]);
 
     const selectSegment = (segmentId: number, multi = false) => {
         const newSteps = steps.map(step => {
@@ -198,7 +198,8 @@ export default function WorkspacePage() {
         updateStepsWithSelection(newSteps);
     };
 
-    const deselectAllInStep = () => {
+
+    const deselectAllInStep = useCallback(() => {
         const newSteps = steps.map(step => {
             if (step.id === currentStepId) {
                 return { ...step, segments: [] };
@@ -206,7 +207,7 @@ export default function WorkspacePage() {
             return step;
         });
         updateStepsWithSelection(newSteps);
-    }
+    }, [steps, currentStepId, pushHistory]); // Added callback and dependencies
 
     // --- Mouse & Tool Handling ---
     const getCanvasPoint = (e: React.MouseEvent<HTMLCanvasElement>): Point => {
@@ -274,7 +275,6 @@ export default function WorkspacePage() {
         }
 
         if (activeTool !== 'hand' && activeTool !== 'lasso') {
-            let foundId: number | null = null;
             const hitRadius = 5 / transform.scale;
 
             for (const seg of segments) {
