@@ -1,6 +1,6 @@
 "use client"
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Layers, Check, ChevronRight, Download, Brush, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, FileCode, Hand, Eraser } from 'lucide-react';
+import { Upload, Layers, ChevronRight, Download, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, Hand } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';

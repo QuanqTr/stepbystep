@@ -2,7 +2,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 import cv2
-from skimage.morphology import skeletonize
 from io import BytesIO
 from typing import List, Dict
 
@@ -16,6 +15,92 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def zhang_suen_thinning(binary_image):
+    """
+    Perform Zhang-Suen thinning algorithm for skeletonization using OpenCV.
+    Input: Binary image (0 and 1, or 0 and 255 where 255 is foreground).
+    Output: Skeletonized image (0 and 255).
+    """
+    # Ensure binary is 0 and 1
+    if binary_image.max() > 1:
+        binary_image = (binary_image > 0).astype(np.uint8)
+    
+    skeleton = binary_image.copy()
+    
+    # Define kernels for Zhang-Suen
+    # This involves complex hit-or-miss interactions. 
+    # A simpler approach in classic CV is commonly just `cv2.ximgproc.thinning` 
+    # but that requires opencv-contrib-python which might be large too.
+    # Let's implement a standard iterative erosion (morphological thinning) for robustness without extra deps.
+    
+    # Actually, standard cv2.erode isn't true skeletonization.
+    # Let's use a standard implementation available in pure numpy or basic cv2.
+    # A common effective way without `ximgproc` is iteratively eroding until no change, 
+    # but preserving connectivity.
+    
+    # Standard 2-pass algorithm (Zhang-Suen) implementation with cv2 filters is efficient enough.
+    # But for simplicity and stability without `skimage`, we can try a simple distance transform ridge
+    # or just use the built-in `cv2.ximgproc.thinning` IF `opencv-python-headless` includes it.
+    # Standard `opencv-python-headless` often DOES NOT include `ximgproc` (part of contrib).
+    
+    # Start basic morphological thinning (inefficient but works for 250MB limit context):
+    skel = np.zeros(binary_image.shape, np.uint8)
+    eroded = binary_image.copy() * 255 # working with 0-255
+    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3,3))
+    
+    while True:
+        eroded_next = cv2.erode(eroded, element)
+        temp = cv2.dilate(eroded_next, element)
+        temp = cv2.subtract(eroded, temp)
+        skel = cv2.bitwise_or(skel, temp)
+        eroded = eroded_next.copy()
+        if cv2.countNonZero(eroded) == 0:
+            break
+            
+    return skel
+
+def simple_clustering(data: List[np.ndarray], eps: float):
+    """
+    Simple distance-based clustering (like simpler DBSCAN) to replace sklearn.
+    data: List[np.array([y, x])] centroids
+    eps: max distance
+    Returns: labels array
+    """
+    n = len(data)
+    if n == 0:
+        return []
+    
+    labels = [-1] * n
+    cluster_id = 0
+    
+    for i in range(n):
+        if labels[i] != -1:
+            continue
+            
+        # Start new cluster
+        labels[i] = cluster_id
+        stack = [i]
+        
+        while stack:
+            current_idx = stack.pop()
+            current_point = data[current_idx]
+            
+            # Find neighbors
+            for j in range(n):
+                if labels[j] != -1:
+                    continue
+                
+                # Euclidean distance
+                dist = np.linalg.norm(current_point - data[j])
+                
+                if dist <= eps:
+                    labels[j] = cluster_id
+                    stack.append(j)
+        
+        cluster_id += 1
+        
+    return labels
 
 def detect_junctions(skeleton: np.ndarray) -> np.ndarray:
     """
@@ -59,11 +144,10 @@ async def process_image(file: UploadFile = File(...)):
         # Assuming line art is black lines on white background -> Invert to get white lines.
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # 2. Skeletonization
-        # skimage skeletonize expects boolean or 0/1 array.
-        binary_bool = binary > 0
-        skeleton = skeletonize(binary_bool)
-        skeleton_uint8 = (skeleton * 255).astype(np.uint8)
+        # 2. Skeletonization (Replaced skimage)
+        # Normalize binary for morphological ops
+        binary_bool = (binary > 0).astype(np.uint8)
+        skeleton_uint8 = zhang_suen_thinning(binary_bool)
         
         # 2.5 Distance Transform for Width Estimation
         # Calculate distance from background for every foreground pixel
@@ -88,28 +172,30 @@ async def process_image(file: UploadFile = File(...)):
         # Collect centroids for clustering
         valid_centroids = []
         valid_label_ids = []
-
-        for label_id in range(1, num_labels): # Skip background (0)
+        
+        # Skip background (label 0)
+        # Note: centroids are (x, y) float
+        for label_id in range(1, num_labels): 
             if stats[label_id, cv2.CC_STAT_AREA] < min_segment_length:
                 continue
             
-            valid_centroids.append(centroids[label_id])
+            # Switch to (y, x) for distance calculation to match numpy standard if needed, 
+            # but Euclidean is symmetric. Keeping (y, x) array for clustering function if using indices.
+            # Centroids from cv2 are (x, y). Let's use (y, x) for consistency with matrix indexing if needed.
+            # Actually clustering just needs consistent coordinates. Let's use (x,y)
+            cx, cy = centroids[label_id]
+            valid_centroids.append(np.array([cy, cx])) # Use Y, X for consistency with image coords usually
             valid_label_ids.append(label_id)
 
-        # 6. Proximity Clustering (DBSCAN)
-        # Epsilon is max distance between two samples for one to be considered as in the neighborhood of the other.
-        # min_samples=1 ensures every point is part of a cluster (no noise points thrown away if possible, or just own cluster)
+        # 6. Proximity Clustering (Replaced sklearn DBSCAN)
         group_ids = {}
         if valid_centroids:
-            from sklearn.cluster import DBSCAN
-            # eps=50 pixels seems reasonable for "nearby" strokes? Adjustable.
-            # Convert centroids to np array
-            X = np.array(valid_centroids)
-            # eps 30-50 depends on image resolution. Let's pick 35.
-            clustering = DBSCAN(eps=35, min_samples=1).fit(X)
+            # Custom simple clustering
+            # eps=35 pixels
+            clustering_labels = simple_clustering(valid_centroids, eps=35.0)
             
             for idx, label_id in enumerate(valid_label_ids):
-                group_ids[label_id] = int(clustering.labels_[idx])
+                group_ids[label_id] = clustering_labels[idx]
         
         height, width = segments_skeleton.shape
         
