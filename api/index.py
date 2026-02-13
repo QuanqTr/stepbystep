@@ -118,20 +118,60 @@ async def process_image(file: UploadFile = File(...)):
             # np.where returns (row_indices, col_indices) -> (y, x)
             ys, xs = np.where(labels == label_id)
             
-            # Calculate widths for each point using Distance Transform
-            # dist_transform returns float32 distance
-            # Width = 2 * distance
-            points = []
-            for x, y in zip(xs, ys):
-                 w = dist_transform[y, x] * 2.0
-                 points.append({"x": int(x), "y": int(y), "w": float(w)})
+            # Sort points to form a continuous path
+            # 1. Build Adjacency Graph within the segment
+            pixel_set = set(zip(xs, ys))
+            adj = { (x,y): [] for x,y in zip(xs, ys) }
             
-            # Pack into list for sorting (optional, but good for drawing order)
-            # Simple assumption: points are somewhat ordered or we treat them as "cloud" for circle drawing.
-            # For smooth strokes, we might need to sort them. 
-            # Skeletonize usually produces ordered-ish paths but not guaranteed by np.where.
-            # Let's trust np.where order for now (raster scan order) which is BAD for drawing lines.
-            # For variable width "brush", drawing circles at x,y is independent of order.
+            for px, py in zip(xs, ys):
+                # Check 8-neighbors
+                for dy in [-1, 0, 1]:
+                    for dx in [-1, 0, 1]:
+                        if dx == 0 and dy == 0: continue
+                        nx, ny = px + dx, py + dy
+                        if (nx, ny) in pixel_set:
+                            adj[(px, py)].append((nx, ny))
+                            
+            # 2. Find Endpoints (Degree 1) or Start anywhere if Loop
+            start_node = None
+            for node, neighbors in adj.items():
+                if len(neighbors) == 1:
+                    start_node = node
+                    break
+            
+            if start_node is None and len(pixel_set) > 0:
+                # Loop or isolated point or internal weirdness, pick random
+                 start_node = list(pixel_set)[0]
+                 
+            # 3. Traverse (DFS/BFS)
+            visited = set()
+            ordered_points = []
+            stack = [start_node]
+            
+            # Simple traversal for simple paths
+            while stack:
+                curr = stack.pop()
+                if curr in visited: continue
+                visited.add(curr)
+                
+                # Get width for this point
+                cx, cy = curr
+                w = dist_transform[cy, cx] * 2.0
+                ordered_points.append({"x": int(cx), "y": int(cy), "w": float(w)})
+                
+                # Add neighbors
+                # Sort neighbors to prefer closest/direction?
+                # For skeleton, simple neighbor follow is usually okay
+                for n in adj[curr]:
+                    if n not in visited:
+                        stack.append(n)
+                        
+            # If we have disjoint components in one label (shouldn't happen with connectedComponents),
+            # we only grabbed one. But connectedComponents guarantees connectivity.
+            # However, logic above might miss branches if it's not a simple line.
+            # But we cut junctions, so segments should be simple lines.
+            
+            points = ordered_points
             
             # Calculate Average Stroke Width for fallback
             segment_widths = [p["w"] for p in points]

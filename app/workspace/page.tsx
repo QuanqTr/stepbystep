@@ -1,6 +1,6 @@
 "use client"
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Layers, Check, ChevronRight, Download, Brush, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, FileCode, Hand, Eraser } from 'lucide-react';
+import { Upload, Layers, Check, ChevronRight, Download, Brush, Trash2, Zap, Lasso, Wand2, MousePointer2, Undo2, Redo2, ZoomIn, ZoomOut, X, FileImage, FileCode, Hand, Eraser, ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -61,7 +61,10 @@ export default function WorkspacePage() {
     const [isDragSelect, setIsDragSelect] = useState(false);
     const [showOriginal, setShowOriginal] = useState(true);
     const [isDeleteMode, setIsDeleteMode] = useState(false);
+
     const [downloadAll, setDownloadAll] = useState(false);
+    const [exportFormat, setExportFormat] = useState<'png' | 'svg' | 'webp' | 'gif'>('png');
+    const [showExportDropdown, setShowExportDropdown] = useState(false);
 
     // GIF Modal State
     const [showGifModal, setShowGifModal] = useState(false);
@@ -72,6 +75,130 @@ export default function WorkspacePage() {
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Resize Modal State
+    const [showResizeModal, setShowResizeModal] = useState(false);
+    const [resizeFile, setResizeFile] = useState<File | null>(null);
+    const [resizePreview, setResizePreview] = useState<string | null>(null);
+    const [resizeWidth, setResizeWidth] = useState(850);
+    const [resizeHeight, setResizeHeight] = useState(850);
+    const resizeCanvasRef = useRef<HTMLCanvasElement>(null);
+    const [resizeOffset, setResizeOffset] = useState({ x: 0, y: 0 });
+    const [resizeImageObj, setResizeImageObj] = useState<HTMLImageElement | null>(null);
+    const [isDraggingResize, setIsDraggingResize] = useState(false);
+    const [resizeLastMouse, setResizeLastMouse] = useState({ x: 0, y: 0 });
+    const [resizeScale, setResizeScale] = useState(1);
+
+    const onFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const file = e.target.files[0];
+            setResizeFile(file);
+            const url = URL.createObjectURL(file);
+            setResizePreview(url);
+
+            // Load image to get dims and center it
+            const img = new Image();
+            img.onload = () => {
+                setResizeImageObj(img);
+                // Default 850x850
+                const defW = 850;
+                const defH = 850;
+                setResizeWidth(defW);
+                setResizeHeight(defH);
+                setResizeHeight(defH);
+                setResizeScale(1);
+                // Center the image
+                setResizeOffset({
+                    x: (defW - img.width) / 2,
+                    y: (defH - img.height) / 2
+                });
+                setShowResizeModal(true);
+            };
+            img.src = url;
+        }
+        // Reset input
+        e.target.value = '';
+    };
+
+    // Resize Preview Drawing Effect
+    useEffect(() => {
+        if (!showResizeModal || !resizeCanvasRef.current || !resizeImageObj) return;
+        const canvas = resizeCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Clear & Fill White
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Image at Offset (1:1 scale)
+        ctx.drawImage(resizeImageObj, resizeOffset.x, resizeOffset.y, resizeImageObj.width * resizeScale, resizeImageObj.height * resizeScale);
+
+    }, [showResizeModal, resizeOffset, resizeWidth, resizeHeight, resizeImageObj, resizeScale]);
+
+    const handleResizeMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        setIsDraggingResize(true);
+        setResizeLastMouse({ x: e.clientX, y: e.clientY });
+    };
+
+    const handleResizeMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+        if (!isDraggingResize || !resizeCanvasRef.current) return;
+
+        // Calculate delta
+        const dx = e.clientX - resizeLastMouse.x;
+        const dy = e.clientY - resizeLastMouse.y;
+
+        // Map screen pixels to canvas pixels
+        // The canvas might be scaled via CSS (e.g. max-height: 400px)
+        const rect = resizeCanvasRef.current.getBoundingClientRect();
+        const scaleX = resizeWidth / rect.width;
+        const scaleY = resizeHeight / rect.height;
+
+        setResizeOffset(prev => ({
+            x: prev.x + dx * scaleX,
+            y: prev.y + dy * scaleY
+        }));
+        setResizeLastMouse({ x: e.clientX, y: e.clientY });
+    };
+
+    const handleResizeMouseUp = () => {
+        setIsDraggingResize(false);
+    };
+
+    const processResizedImage = async () => {
+        if (!resizeFile || !resizePreview) return;
+
+        const img = new Image();
+        img.src = resizePreview;
+        await new Promise(resolve => { img.onload = resolve; });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = resizeWidth;
+        canvas.height = resizeHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Draw and Resize (Fit Contain or Stretch? Usually Stretch or Crop for specific dims)
+        // Let's do contain (maintain aspect ratio) and fill white? Or just drawImage (stretch)?
+        // User asked for "customize dimensions", implying they might want to normalize input.
+        // Let's stretch to fill for now as it's simplest for "resize", or we can maintain aspect ratio.
+        // Given it's a drawing tool, maybe "Contain" is safer, but "Stretch" ensures exact 850x850.
+        // Let's just drawImage to the new size (Stretch).
+        // Draw with Offset to preserve aspect ratio (Crop/Pad)
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, resizeWidth, resizeHeight);
+        ctx.drawImage(img, resizeOffset.x, resizeOffset.y, img.width * resizeScale, img.height * resizeScale); // Draw with Scale
+
+        canvas.toBlob((blob) => {
+            if (blob) {
+                const file = new File([blob], resizeFile.name, { type: resizeFile.type });
+                handleImageUpload(file); // Call the original uploader
+                setShowResizeModal(false);
+                setResizeFile(null);
+                setResizePreview(null);
+            }
+        }, resizeFile.type);
+    };
 
     // --- History Management ---
     const pushHistory = useCallback((newSteps: Step[], newCurrentStepId: number) => {
@@ -109,8 +236,14 @@ export default function WorkspacePage() {
     const assignedSegments = getAssignedSegmentIds();
 
     // --- Initial Setup ---
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+    const handleImageUpload = async (fileOrEvent: React.ChangeEvent<HTMLInputElement> | File) => {
+        let file: File | undefined;
+        if (fileOrEvent instanceof File) {
+            file = fileOrEvent;
+        } else if (fileOrEvent.target && fileOrEvent.target.files) {
+            file = fileOrEvent.target.files[0];
+        }
+
         if (!file) return;
 
         const imageUrl = URL.createObjectURL(file);
@@ -398,7 +531,40 @@ export default function WorkspacePage() {
         });
     };
 
-    const exportImage = (stepId?: number) => {
+    const generateSVGContent = (step: Step) => {
+        if (segments.length === 0) return '';
+        let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">`;
+        step.segments.forEach(segId => {
+            const seg = segments.find(s => s.id === segId);
+            if (seg) {
+                const d = seg.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+                svgContent += `<path d="${d}" stroke="black" stroke-width="${seg.width || 1}" fill="none" fill-opacity="0" style="fill:none" stroke-linecap="round" stroke-linejoin="round" />`;
+            }
+        });
+        svgContent += '</svg>';
+        return svgContent;
+    }
+
+    const handleExport = async () => {
+        if (exportFormat === 'gif') {
+            setShowGifModal(true);
+            return;
+        }
+
+        if (downloadAll) {
+            // ZIP Export
+            await exportAllZIP(exportFormat);
+        } else {
+            // Single File Export
+            if (exportFormat === 'svg') {
+                exportSVG();
+            } else {
+                exportImage(undefined, exportFormat);
+            }
+        }
+    };
+
+    const exportImage = (stepId?: number, format: 'png' | 'webp' = 'png') => {
         if (!imageSize.width) return;
         const canvas = document.createElement('canvas');
         canvas.width = imageSize.width;
@@ -410,35 +576,44 @@ export default function WorkspacePage() {
         const targetStepId = stepId || currentStepId;
         drawSegmentsOnCanvas(ctx, targetStepId, false); // False = Exclusive
 
+        const mimeType = format === 'webp' ? 'image/webp' : 'image/png';
         canvas.toBlob(blob => {
-            if (blob) saveAs(blob, `step-${targetStepId}-${Date.now()}.png`);
-        });
+            if (blob) saveAs(blob, `step-${targetStepId}-${Date.now()}.${format}`);
+        }, mimeType);
     };
 
-    const exportAllZIP = async () => {
+    const exportAllZIP = async (format: 'png' | 'svg' | 'webp') => {
         if (steps.length === 0) return;
         const zip = new JSZip();
         const folder = zip.folder("steps");
 
         for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
-            const canvas = document.createElement('canvas');
-            canvas.width = imageSize.width;
-            canvas.height = imageSize.height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-                // Draw cumulative up to this step
-                const relevantSteps = [steps[i]]; // EXCLUSIVE
-                relevantSteps.forEach(s => {
-                    s.segments.forEach(segId => {
-                        const seg = segments.find(sg => sg.id === segId);
-                        if (seg) drawSegmentPath(ctx, seg, '#000000', 1.0);
-                    });
-                });
 
-                const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve));
-                if (blob) {
-                    folder?.file(`step-${i + 1}.png`, blob);
+            if (format === 'svg') {
+                const svgContent = generateSVGContent(step);
+                folder?.file(`step-${i + 1}.svg`, svgContent);
+
+            } else {
+                // PNG / WebP
+                const canvas = document.createElement('canvas');
+                canvas.width = imageSize.width;
+                canvas.height = imageSize.height;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    const relevantSteps = [step]; // EXCLUSIVE
+                    relevantSteps.forEach(s => {
+                        s.segments.forEach(segId => {
+                            const seg = segments.find(sg => sg.id === segId);
+                            if (seg) drawSegmentPath(ctx, seg, '#000000', 1.0);
+                        });
+                    });
+
+                    const mimeType = format === 'webp' ? 'image/webp' : 'image/png';
+                    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, mimeType));
+                    if (blob) {
+                        folder?.file(`step-${i + 1}.${format}`, blob);
+                    }
                 }
             }
         }
@@ -449,53 +624,16 @@ export default function WorkspacePage() {
 
     const exportSVG = (stepId?: number) => {
         if (segments.length === 0) return;
-        let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">`;
-
-        // Export EXCLUSIVE (Current Step Only)
         const targetStepId = stepId || currentStepId;
         const stepIndex = steps.findIndex(s => s.id === targetStepId);
-        const relevantSteps = (stepIndex !== -1) ? [steps[stepIndex]] : [];
+        if (stepIndex === -1) return;
 
-        relevantSteps.forEach(step => {
-            step.segments.forEach(segId => {
-                const seg = segments.find(s => s.id === segId);
-                if (seg) {
-                    const d = seg.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-                    svgContent += `<path d="${d}" stroke="black" stroke-width="${seg.width || 1}" fill="none" fill-opacity="0" style="fill:none" stroke-linecap="round" stroke-linejoin="round" />`;
-                }
-            });
-        });
-        svgContent += '</svg>';
+        const svgContent = generateSVGContent(steps[stepIndex]);
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
         saveAs(blob, `step-${targetStepId}-${Date.now()}.svg`);
     };
 
-    const exportAllSVG = async () => {
-        if (steps.length === 0) return;
-        const zip = new JSZip();
-        const folder = zip.folder("steps_svg");
 
-        steps.forEach((step, index) => {
-            // Generate SVG for step i (EXCLUSIVE)
-            let svgContent = `<svg width="${imageSize.width}" height="${imageSize.height}" xmlns="http://www.w3.org/2000/svg">`;
-            const relevantSteps = [steps[index]]; // EXCLUSIVE
-
-            relevantSteps.forEach(s => {
-                s.segments.forEach(segId => {
-                    const seg = segments.find(sg => sg.id === segId);
-                    if (seg) {
-                        const d = seg.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-                        svgContent += `<path d="${d}" stroke="black" stroke-width="${seg.width || 1}" fill="none" fill-opacity="0" style="fill:none" stroke-linecap="round" stroke-linejoin="round" />`;
-                    }
-                });
-            });
-            svgContent += '</svg>';
-            folder?.file(`step-${index + 1}.svg`, svgContent);
-        });
-
-        const content = await zip.generateAsync({ type: "blob" });
-        saveAs(content, `drawing-steps-svg-${Date.now()}.zip`);
-    };
 
     const generateGIF = async (transparent: boolean) => {
         if (!imageSize.width || steps.length === 0) return;
@@ -624,25 +762,28 @@ export default function WorkspacePage() {
     // --- Rendering ---
     const drawSegmentPath = (ctx: CanvasRenderingContext2D, seg: Segment, color: string, alpha: number) => {
         if (seg.points.length === 0) return;
-        ctx.fillStyle = color; // For circles
-        ctx.strokeStyle = color; // For path fallback
-        ctx.globalAlpha = alpha;
 
-        // High Quality rendering: Draw circle at every point with specific radius
-        // This handles variable width directly.
-        // Performance warning: Many calls. But for < 10k points it should be fine.
-        // Optimize: checks distance between points?
         ctx.beginPath();
-        for (const p of seg.points) {
-            const radius = (p.w && p.w > 0 ? p.w : (seg.width || 1)) / 2;
-            // Draw circle
-            ctx.moveTo(p.x + radius, p.y);
-            ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        // Move to first point
+        ctx.moveTo(seg.points[0].x, seg.points[0].y);
+
+        // Draw lines to subsequent points
+        // For smoother curves, we could use quadraticCurveTo with midpoints
+        // But since points are 1px apart (skeleton), lineTo is usually sufficient if cap/join are round
+        for (let i = 1; i < seg.points.length; i++) {
+            const p = seg.points[i];
+            ctx.lineTo(p.x, p.y);
         }
-        ctx.fill();
-        // Note: "Path" approach above draws disconnected circles if points are far.
-        // Since these come from skeletonize (connected), they should be dense (1px neighbors).
-        // If gaps appear, we might need to fill gaps.
+
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        // Use segment average width or default to 1. 
+        // Note: We ignore per-point width for now to prevent "cracked" look of circle drawing.
+        // If variable width is needed, we'd need to construct a polygon ribbon.
+        ctx.lineWidth = seg.width || 1;
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = alpha;
+        ctx.stroke();
     };
 
     // --- Keyboard Shortcuts ---
@@ -836,110 +977,69 @@ export default function WorkspacePage() {
                     </div>
 
                     <div className="flex flex-col gap-2">
-                        <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer select-none bg-neutral-800/50 p-2 rounded-lg border border-neutral-800 hover:border-neutral-700 transition-colors">
-                            <input
-                                type="checkbox"
-                                checked={downloadAll}
-                                onChange={e => setDownloadAll(e.target.checked)}
-                                className="rounded bg-neutral-900 border-neutral-700 accent-blue-500 w-4 h-4"
-                            />
-                            <span className={downloadAll ? "text-blue-400 font-medium" : ""}>Capture all steps</span>
-                        </label>
-
-                        <div className="flex gap-2">
-                            <button
-                                onClick={() => downloadAll ? exportAllZIP() : exportImage()}
-                                className={cn(
-                                    "flex-1 flex items-center justify-center gap-2 text-white py-2 rounded-lg font-medium transition-colors text-sm",
-                                    downloadAll
-                                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-900/20"
-                                        : "bg-neutral-800 hover:bg-neutral-700"
-                                )}
-                                title={downloadAll ? "Download ZIP of all steps" : "Download current step image"}
-                            >
-                                <Download size={16} />
-                                {downloadAll ? "Download ZIP" : "Download PNG"}
-                            </button>
-
-                            <button
-                                onClick={() => downloadAll ? exportAllSVG() : exportSVG()}
-                                className="flex-1 flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 text-white py-2 rounded-lg font-medium transition-colors text-sm"
-                                title={downloadAll ? "Download ZIP of all steps (SVG)" : "Download current step as SVG"}
-                            >
-                                <FileCode size={16} />
-                                {downloadAll && <span className="text-xs">ZIP</span>}
-                            </button>
-                        </div>
-
-                        <button
-                            onClick={openGifModal}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg font-medium transition-colors text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20"
-                            title="Generate a GIF showing step-by-step progress"
-                        >
-                            <FileImage size={16} /> Download GIF (Process)
-                        </button>
                     </div>
                 </div>
+            </div>
 
-                {/* GIF Preview Modal */}
-                {showGifModal && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-                        <div className="bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl max-w-lg w-full flex flex-col overflow-hidden">
-                            <div className="p-4 border-b border-neutral-800 flex justify-between items-center bg-neutral-800/50">
-                                <h3 className="font-semibold text-white flex items-center gap-2">
-                                    <FileImage size={18} className="text-indigo-400" />
-                                    GIF Preview
-                                </h3>
-                                <button onClick={() => setShowGifModal(false)} className="text-neutral-400 hover:text-white transition-colors">
-                                    <X size={20} />
-                                </button>
+            {/* GIF Preview Modal */}
+            {showGifModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                    <div className="bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl max-w-lg w-full flex flex-col overflow-hidden">
+                        <div className="p-4 border-b border-neutral-800 flex justify-between items-center bg-neutral-800/50">
+                            <h3 className="font-semibold text-white flex items-center gap-2">
+                                <FileImage size={18} className="text-indigo-400" />
+                                GIF Preview
+                            </h3>
+                            <button onClick={() => setShowGifModal(false)} className="text-neutral-400 hover:text-white transition-colors">
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="p-6 flex flex-col items-center gap-4 bg-neutral-900/50">
+                            <div className="relative rounded-lg overflow-hidden border border-neutral-700 bg-[url('https://media.istockphoto.com/id/1145618475/vector/checkered-flag-chequered-flag-racing-flag-vector-background.jpg?s=612x612&w=0&k=20&c=N5-802n4vVp_XGjXvL_9Qv_0_0_0_0_0.jpg')] bg-contain">
+                                {/* Checkerboard pattern simulation for transparency */}
+                                <div className="absolute inset-0 bg-neutral-800" style={{ backgroundImage: 'linear-gradient(45deg, #333 25%, transparent 25%), linear-gradient(-45deg, #333 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #333 75%), linear-gradient(-45deg, transparent 75%, #333 75%)', backgroundSize: '20px 20px', backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px', opacity: 0.2, zIndex: 0 }} />
+
+                                {isGeneratingGif ? (
+                                    <div className="flex flex-col items-center justify-center h-48 w-64 z-10 relative text-neutral-400 gap-2">
+                                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                                        <span className="text-xs">Generating GIF...</span>
+                                    </div>
+                                ) : (
+                                    gifUrl && <img src={gifUrl} alt="GIF Preview" className="max-h-[300px] max-w-full object-contain z-10 relative" />
+                                )}
                             </div>
 
-                            <div className="p-6 flex flex-col items-center gap-4 bg-neutral-900/50">
-                                <div className="relative rounded-lg overflow-hidden border border-neutral-700 bg-[url('https://media.istockphoto.com/id/1145618475/vector/checkered-flag-chequered-flag-racing-flag-vector-background.jpg?s=612x612&w=0&k=20&c=N5-802n4vVp_XGjXvL_9Qv_0_0_0_0_0.jpg')] bg-contain">
-                                    {/* Checkerboard pattern simulation for transparency */}
-                                    <div className="absolute inset-0 bg-neutral-800" style={{ backgroundImage: 'linear-gradient(45deg, #333 25%, transparent 25%), linear-gradient(-45deg, #333 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #333 75%), linear-gradient(-45deg, transparent 75%, #333 75%)', backgroundSize: '20px 20px', backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px', opacity: 0.2, zIndex: 0 }} />
+                            <label className="flex items-center gap-2 cursor-pointer select-none bg-neutral-800 hover:bg-neutral-700 p-2 px-3 rounded-lg transition-colors border border-neutral-700">
+                                <input
+                                    type="checkbox"
+                                    checked={gifTransparent}
+                                    onChange={e => setGifTransparent(e.target.checked)}
+                                    className="rounded bg-neutral-900 border-neutral-600 accent-indigo-500 w-4 h-4"
+                                />
+                                <span className="text-sm text-neutral-300">Transparent Background</span>
+                            </label>
+                        </div>
 
-                                    {isGeneratingGif ? (
-                                        <div className="flex flex-col items-center justify-center h-48 w-64 z-10 relative text-neutral-400 gap-2">
-                                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-                                            <span className="text-xs">Generating GIF...</span>
-                                        </div>
-                                    ) : (
-                                        gifUrl && <img src={gifUrl} alt="GIF Preview" className="max-h-[300px] max-w-full object-contain z-10 relative" />
-                                    )}
-                                </div>
-
-                                <label className="flex items-center gap-2 cursor-pointer select-none bg-neutral-800 hover:bg-neutral-700 p-2 px-3 rounded-lg transition-colors border border-neutral-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={gifTransparent}
-                                        onChange={e => setGifTransparent(e.target.checked)}
-                                        className="rounded bg-neutral-900 border-neutral-600 accent-indigo-500 w-4 h-4"
-                                    />
-                                    <span className="text-sm text-neutral-300">Transparent Background</span>
-                                </label>
-                            </div>
-
-                            <div className="p-4 border-t border-neutral-800 flex gap-3 justify-end bg-neutral-800/30">
-                                <button
-                                    onClick={() => setShowGifModal(false)}
-                                    className="px-4 py-2 rounded-lg text-sm font-medium text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={downloadGif}
-                                    disabled={!gifBlob || isGeneratingGif}
-                                    className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-900/20 flex items-center gap-2"
-                                >
-                                    <Download size={16} /> Download
-                                </button>
-                            </div>
+                        <div className="p-4 border-t border-neutral-800 flex gap-3 justify-end bg-neutral-800/30">
+                            <button
+                                onClick={() => setShowGifModal(false)}
+                                className="px-4 py-2 rounded-lg text-sm font-medium text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={downloadGif}
+                                disabled={!gifBlob || isGeneratingGif}
+                                className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-900/20 flex items-center gap-2"
+                            >
+                                <Download size={16} /> Download
+                            </button>
                         </div>
                     </div>
-                )}
-            </div>
+                </div>
+            )}
+
 
             {/* Main Workspace */}
             <div className="flex-1 flex flex-col relative bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-neutral-900 to-neutral-950">
@@ -1007,7 +1107,7 @@ export default function WorkspacePage() {
                         <input
                             type="file"
                             ref={fileInputRef}
-                            onChange={handleImageUpload}
+                            onChange={onFileSelect}
                             hidden
                             accept="image/*"
                         />
@@ -1015,8 +1115,62 @@ export default function WorkspacePage() {
                             onClick={() => fileInputRef.current?.click()}
                             className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-lg shadow-blue-900/20"
                         >
-                            <Upload size={16} /> Upload Image
+                            <Upload size={16} /> Import
                         </button>
+
+                        <div className="w-px h-6 bg-neutral-700 mx-1" />
+
+                        {/* Unified Export Button */}
+                        <div className="flex items-center bg-neutral-800 rounded-lg p-0.5 border border-neutral-700 relative">
+                            <button
+                                onClick={handleExport}
+                                className="px-3 py-1.5 hover:bg-neutral-700 rounded-md text-sm font-medium text-neutral-200 flex items-center gap-2 transition-colors border-r border-neutral-700"
+                            >
+                                <Download size={16} />
+                                {downloadAll ? 'Download All' : 'Download'}
+                            </button>
+                            <div className="relative">
+                                <button
+                                    onClick={() => setShowExportDropdown(!showExportDropdown)}
+                                    className="px-1.5 py-1.5 hover:bg-neutral-700 rounded-md text-neutral-400 hover:text-white transition-colors"
+                                >
+                                    <span className="text-xs font-bold uppercase w-8 text-center inline-block">{exportFormat}</span>
+                                </button>
+
+                                {showExportDropdown && (
+                                    <div className="absolute top-full right-0 mt-2 bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl overflow-hidden z-50 min-w-[120px] flex flex-col">
+                                        {(['png', 'svg', 'webp', 'gif'] as const).map(fmt => (
+                                            <button
+                                                key={fmt}
+                                                onClick={() => {
+                                                    setExportFormat(fmt);
+                                                    setShowExportDropdown(false);
+                                                }}
+                                                className={cn(
+                                                    "px-4 py-2 text-left text-sm hover:bg-neutral-800 transition-colors uppercase font-medium",
+                                                    exportFormat === fmt ? "text-blue-400 bg-blue-500/10" : "text-neutral-300"
+                                                )}
+                                            >
+                                                {fmt}
+                                            </button>
+                                        ))}
+                                        <div className="h-px bg-neutral-800 my-1" />
+                                        <label className="flex items-center gap-2 px-4 py-2 cursor-pointer hover:bg-neutral-800">
+                                            <input
+                                                type="checkbox"
+                                                checked={downloadAll}
+                                                onChange={(e) => setDownloadAll(e.target.checked)}
+                                                className="rounded bg-neutral-700 border-neutral-600 text-blue-500 accent-blue-500"
+                                                disabled={exportFormat === 'gif'}
+                                            />
+                                            <span className={cn("text-xs text-neutral-300", exportFormat === 'gif' && "opacity-50")}>All Steps</span>
+                                        </label>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+
                     </div>
                 </div>
 
@@ -1064,7 +1218,99 @@ export default function WorkspacePage() {
                     )}
                 </div>
             </div>
-        </div>
+            {/* Resize Confirmation Modal */}
+            {
+                showResizeModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+                        <div className="bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl max-w-md w-full flex flex-col overflow-hidden">
+                            <div className="p-4 border-b border-neutral-800 flex justify-between items-center bg-neutral-800/50">
+                                <h3 className="font-semibold text-white flex items-center gap-2">
+                                    <ImageIcon size={18} className="text-blue-400" />
+                                    Resize Image
+                                </h3>
+                                <button onClick={() => setShowResizeModal(false)} className="text-neutral-400 hover:text-white transition-colors">
+                                    <X size={20} />
+                                </button>
+                            </div>
+
+                            <div className="p-6 flex flex-col gap-6 bg-neutral-900/50">
+                                {/* Preview */}
+                                <div className="flex justify-center bg-neutral-950 rounded-lg border border-neutral-800 p-2 overflow-hidden relative">
+                                    <canvas
+                                        ref={resizeCanvasRef}
+                                        width={resizeWidth}
+                                        height={resizeHeight}
+                                        onMouseDown={handleResizeMouseDown}
+                                        onMouseMove={handleResizeMouseMove}
+                                        onMouseUp={handleResizeMouseUp}
+                                        onMouseLeave={handleResizeMouseUp}
+                                        className="max-h-[300px] w-auto border border-neutral-700 shadow-sm cursor-move bg-white"
+                                        style={{ imageRendering: 'pixelated' }}
+                                    />
+                                    <div className="absolute bottom-4 right-4 text-xs font-mono text-neutral-500 bg-black/50 px-2 py-1 rounded backdrop-blur pointer-events-none">
+                                        Drag to Pan
+                                    </div>
+                                </div>
+
+                                {/* Zoom Control */}
+                                <div className="flex flex-col gap-2">
+                                    <label className="text-xs font-medium text-neutral-400 flex justify-between">
+                                        <span>Zoom</span>
+                                        <span>{Math.round(resizeScale * 100)}%</span>
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.1"
+                                        max="3"
+                                        step="0.1"
+                                        value={resizeScale}
+                                        onChange={(e) => setResizeScale(parseFloat(e.target.value))}
+                                        className="w-full accent-blue-500 h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer"
+                                    />
+                                </div>
+
+                                {/* Inputs */}
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="flex flex-col gap-1">
+                                        <label className="text-xs font-medium text-neutral-400">Width (px)</label>
+                                        <input
+                                            type="number"
+                                            value={resizeWidth}
+                                            onChange={(e) => setResizeWidth(Number(e.target.value))}
+                                            className="bg-neutral-800 border border-neutral-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                                        />
+                                    </div>
+                                    <div className="flex flex-col gap-1">
+                                        <label className="text-xs font-medium text-neutral-400">Height (px)</label>
+                                        <input
+                                            type="number"
+                                            value={resizeHeight}
+                                            onChange={(e) => setResizeHeight(Number(e.target.value))}
+                                            className="bg-neutral-800 border border-neutral-700 rounded-lg p-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="p-4 border-t border-neutral-800 flex gap-3 justify-end bg-neutral-800/30">
+                                <button
+                                    onClick={() => setShowResizeModal(false)}
+                                    className="px-4 py-2 rounded-lg text-sm font-medium text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={processResizedImage}
+                                    className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                                >
+                                    <Check size={16} /> Process
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+        </div >
     );
 }
 
